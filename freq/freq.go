@@ -119,6 +119,31 @@ func maxWord(freqs map[string]int) (string, error) {
 	return maxW, nil
 }
 
+func TryScanner(r io.Reader) {
+	freqs := make(map[string]int) // word -> count
+	err := FluentReader{r}.Scan(func(s string) bool {
+		words := wordRe.FindAllString(s, -1) // current line
+		for _, w := range words {
+			w = strings.ToLower(w)
+			freqs[w]++
+		}
+		return true
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+type FluentReader struct{ io.Reader }
+
+func (I FluentReader) Scan(consumer func(string) bool) error {
+	s := bufio.NewScanner(I.Reader)
+	for s.Scan() {
+		consumer(s.Text())
+	}
+	return s.Err()
+}
+
 func wordFrequency(r io.Reader) (map[string]int, error) {
 	s := bufio.NewScanner(r)
 	freqs := make(map[string]int) // word -> count
