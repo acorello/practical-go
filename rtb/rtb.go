@@ -20,32 +20,25 @@ func main() {
 // If algo didn't finish in time, return a default bid
 func bidOn(ctx context.Context, url string) Bid {
 	//	CONTROLLER
-	//		- UNBUFFERED CHANNEL*
-	//			- 1 ASYNC WRITER*
-	//		- (1 READER* |X| 1 TIMEOUT [+async DRAINER])
-	//	UNBUFFERED => couples writer and reader
-	//	TIMEOUT either READER or TIMEOUT
-	//		IF NO READER, THEN WRITER IS STUCK
-	bestBidChan := make(chan Bid)
+	//		- BUFFERED CHANNEL (buffer = N WRITERS)
+	//			- N ASYNC WRITER*
+	//		- (1 READER* |X| 1 TIMEOUT)
+	//	BUFFER => decouples writers and reader
+	//	if TIMEOUT all writes continue, the data is absorbed by the channel buffer and because the channel gets out of all scopes it's garbage collected.
+	bestBidChan := make(chan Bid, 1)
 	go func() {
-		//	WORKER
+		//	WRITER
 		//		has ref to channel
 		//		is the only writer
 		defer close(bestBidChan)    // being the only writer it should close the channel
-		bestBidChan <- bestBid(url) // it may hang if no readers
+		bestBidChan <- bestBid(url) // it will NOT hang because we've got the buffer
 	}()
 	select {
 	case bid := <-bestBidChan:
 		//	CONTROLLER.OK
-		//		we've read the only result => WORKER terminates
 		return bid
 	case <-ctx.Done():
 		//	CONTROLLER.TIMEOUT
-		//		too late, but I have to consume from channel or the writer is stuck
-		go func() {
-			//	DRAINER
-			<-bestBidChan
-		}()
 		return defaultBid
 	}
 }
