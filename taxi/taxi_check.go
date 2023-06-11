@@ -13,7 +13,7 @@ they math the ones in the index file.
   - If there's a mismatch, print the offending file(s) and exit the program with
     non-zero value
 
-Get taxi-sha256.zip from the web site and open it. The index file is sha256sum.txt
+Grab taxi-sha256.zip from the web site and open it. The index file is sha256sum.txt
 */
 package main
 
@@ -68,8 +68,18 @@ func parseSigFile(r io.Reader) (map[string]string, error) {
 	return sigs, nil
 }
 
+func TimeFunc(fn func()) time.Duration {
+	start := time.Now()
+	fn()
+	return time.Since(start)
+}
+
 func main() {
-	rootDir := "/tmp/taxi" // Change to where to unzipped taxi-sha256.zip
+	// Change to where to unzipped taxi-sha256.zip
+	rootDir, found := os.LookupEnv("TAXITEMP")
+	if !found {
+		log.Fatal("Set the location of the unzipped files in TAXITEMP. Eg. `set TAXITEMP (mktemp -d) && unzip ../_extras/taxi-sha256.zip -d $TAXITEMP`")
+	}
 	file, err := os.Open(path.Join(rootDir, "sha256sum.txt"))
 	if err != nil {
 		log.Fatalf("error: %s", err)
@@ -81,49 +91,49 @@ func main() {
 		log.Fatalf("error: %s", err)
 	}
 
+	computedSignatures := make(chan result)
 	start := time.Now()
-	ok := true
-	ch := make(chan result)
 	for name, signature := range sigs {
 		fileName := path.Join(rootDir, name) + ".bz2"
-		// sig, err := fileSig(fileName)
-		go sigWorker(fileName, signature, ch)
+		go sigWorker(computedSignatures, fileName, signature)
 	}
 
-	for range sigs {
-		r := <-ch
-		if r.err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s - %s\n", r.fileName, err)
-			ok = false
-			continue
+	allSignaturesMatched := true
+	countdown := len(sigs)
+	for res := range computedSignatures {
+		allSignaturesMatched = res.err != nil && res.matched
+		if res.err != nil {
+			fmt.Printf("💀 error processing file %q: %v\n", res.filepath, res.err)
+		} else if !res.matched {
+			fmt.Printf("🛑 %q : file hash mismatch\n", res.filepath)
+		} else {
+			fmt.Printf("✅ %q\n", res.filepath)
 		}
-
-		if !r.match {
-			ok = false
-			fmt.Printf("error: %s mismatch\n", r.fileName)
+		if countdown -= 1; countdown == 0 {
+			close(computedSignatures)
 		}
 	}
-
 	duration := time.Since(start)
 	fmt.Printf("processed %d files in %v\n", len(sigs), duration)
-	if !ok {
+	if !allSignaturesMatched {
 		os.Exit(1)
 	}
 }
-
-func sigWorker(fileName, signature string, ch chan<- result) {
-	r := result{fileName: fileName}
-	sig, err := fileSig(fileName)
-	if err != nil {
-		r.err = err
-	} else {
-		r.match = sig == signature
+func sigWorker(results chan<- result, filePath string, expectedSig string) {
+	actualSig, err := fileSig(filePath)
+	res := result{
+		filepath: filePath,
 	}
-	ch <- r
+	if err != nil {
+		res.err = fmt.Errorf("error: %s - %s", filePath, err)
+	} else {
+		res.matched = (actualSig == expectedSig)
+	}
+	results <- res
 }
 
 type result struct {
-	fileName string
+	filepath string
+	matched  bool
 	err      error
-	match    bool
 }
